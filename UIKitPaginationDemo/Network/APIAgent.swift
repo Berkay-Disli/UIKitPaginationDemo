@@ -16,30 +16,38 @@ struct ErrorResponse: Codable, Error {
     static let sample = ErrorResponse(status: 0, errorContext: "", errorCode: "", errorMessage: "")
 }
 
-typealias ResultClosure<T> = (CustomResult<T>) -> Void
+struct APIResponse<T: Codable> {
+    let data: T?
+    let totalPages: Int?
+    
+    init(data: T?, totalPages: Int?) {
+        self.data = data
+        self.totalPages = totalPages
+    }
+}
+
+typealias ResultClosure<T: Codable> = (CustomResult<APIResponse<T>>) -> Void
 typealias CustomResult<T> = Result<T?, ErrorResponse>
 
 struct APIAgent {
     static let shared = APIAgent()
+    
+    private let paginationPagesHeaderKey: String = "x-pagination-pages"
 
     func run<T: Codable>(_ endPoint: EndPoint, _ completion: @escaping ResultClosure<T>) {
         let request = URLRequest(endpoint: endPoint)
-
         request.log()
 
         URLSession.shared.dataTask(with: request) { data, response, error in
-
-            if let error = error {
+            if let error {
                 let error = ErrorResponse(status: 0, errorContext: "", errorCode: "", errorMessage: error.localizedDescription)
-
                 DispatchQueue.main.async {
                     completion(.failure(error))
                 }
             }
 
-            if let response = response, let data = data {
+            if let response, let data {
                 APIAgent.shared.processDataResponse(response, data, endpoint: endPoint) { result in
-
                     DispatchQueue.main.async {
                         completion(result)
                     }
@@ -49,45 +57,7 @@ struct APIAgent {
         .resume()
     }
 
-    func runAudioDownload(_ endPoint: EndPoint, _ completion: @escaping (Result<Data?, ErrorResponse>) -> Void) {
-        let request = URLRequest(endpoint: endPoint)
-
-        request.log()
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-
-            if let error = error {
-                let error = ErrorResponse(status: 0, errorContext: "", errorCode: "", errorMessage: error.localizedDescription)
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
-                return
-            }
-            
-            if let response = response, let data = data {
-                let httpResponse = response as! HTTPURLResponse
-
-                print("RESPONSE -> \(response.url?.absoluteString ?? "-") [\(httpResponse.statusCode)]")
-                print(data.prettyPrintedJSONString ?? "{}")
-
-                if httpResponse.statusCode == 200 {
-                    DispatchQueue.main.async {
-                        completion(.success(data))
-                    }
-                } else {
-                    let error = ErrorResponse(status: httpResponse.statusCode, errorContext: "Invalid response", errorCode: "1001", errorMessage: "Unexpected error")
-                    DispatchQueue.main.async {
-                        completion(.failure(error))
-                    }
-                }
-            }
-        }
-        .resume()
-    }
-
     func processDataResponse<T: Codable>(_ response: URLResponse, _ data: Data, endpoint: EndPoint, completion: @escaping ResultClosure<T>) {
-//        debugPrint(data.prettyPrintedJSONString ?? "Response is Nil")
-
         guard let httpResponse = response as? HTTPURLResponse else {
             let error = ErrorResponse(status: 0, errorContext: "", errorCode: "", errorMessage: "unknown!!")
             completion(.failure(error))
@@ -96,14 +66,17 @@ struct APIAgent {
 
         print("RESPONSE -> \(response.url?.absoluteString ?? "-") [\(httpResponse.statusCode)]")
         print(data.prettyPrintedJSONString ?? "{}")
-
+        
+        let totalPages = httpResponse.value(forHTTPHeaderField: paginationPagesHeaderKey).flatMap { Int($0) }
+        
         switch httpResponse.statusCode {
         case 200 ... 299:
             var errorContext = ""
 
             do {
                 let model = try JSONDecoder().decode(T.self, from: data)
-                completion(.success(model))
+                let apiResponse = APIResponse(data: model, totalPages: totalPages)
+                completion(.success(apiResponse))
                 return
             } catch let DecodingError.dataCorrupted(context) {
                 print(context)

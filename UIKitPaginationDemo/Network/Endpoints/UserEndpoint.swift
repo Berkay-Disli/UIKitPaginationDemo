@@ -28,7 +28,10 @@ enum UserEndpoint: EndPoint {
     var parameters: Parameters? {
         switch self {
         case .getUsers(let page):
-            return ["page": page]
+            return [
+                "page": page,
+                "per_page": 20
+            ]
         }
     }
     
